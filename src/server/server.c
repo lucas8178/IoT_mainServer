@@ -380,7 +380,7 @@ int readMessage(socketMessage* myMessage)
         if(select(*myMessage->max_socket+1, &reads, 0, 0, 0) < 0)
         {
             sprintf(buffer, "Error: select() failed. (%d)", errno);
-	    showMessageInReadWin(myMessage, buffer);
+            showMessageInReadWin(myMessage, buffer);
             wgetch(myMessage->readWin);
             return -1;
         }
@@ -399,7 +399,7 @@ int readMessage(socketMessage* myMessage)
                     if(socket_client < 0)
                     {
                         sprintf(buffer, "Error: accept() failed. (%d)", errno);
-			showMessageInReadWin(myMessage, buffer);
+                        showMessageInReadWin(myMessage, buffer);
                         wgetch(myMessage->readWin);
                         return -1;
                     }
@@ -411,7 +411,7 @@ int readMessage(socketMessage* myMessage)
                     char address_buffer[100];
                     getnameinfo((struct sockaddr*)&client_address, client_len, address_buffer, sizeof(address_buffer), 0, 0, NI_NUMERICHOST);
                     sprintf(buffer, "New connection from %s", address_buffer);
-		    showMessageInReadWin(myMessage, buffer);
+                    showMessageInReadWin(myMessage, buffer);
                 } else
                 {
                     char read[1025] = " ";
@@ -419,19 +419,35 @@ int readMessage(socketMessage* myMessage)
 
                     if(bytes_received < 1)
                     {
+                        int deleted = 0;
                         FD_CLR(i, myMessage->master);
                         client* toLoop = myMessage->myClient;
-                        for(toLoop; toLoop->clientSocket != i && toLoop != NULL; toLoop = toLoop->next);
-                        if(toLoop != NULL)
+                        newGarden* gardenToLoop = myMessage->myGarden;
+                        if(deleted == 0)
                         {
-                            myMessage->myClient = freeOneClient(toLoop);
-                            showMessageInReadWin(myMessage, "Client disconnected\n");
-                        } else
+                            for(toLoop; toLoop->clientSocket != i && toLoop != NULL; toLoop = toLoop->next)
+                            {
+                                if(toLoop != NULL && toLoop->clientSocket == i)
+                                {
+                                    myMessage->myClient = freeOneClient(toLoop);
+                                    showMessageInReadWin(myMessage, "Client disconnected\n");
+                                    deleted = 1;
+                                    break;
+                                }
+                            }
+                        }
+                        if(deleted == 0)
                         {
-                            newGarden* gardenToLoop = myMessage->myGarden;
-                            for(gardenToLoop; gardenToLoop->gardenSocket != i; gardenToLoop = gardenToLoop->next);
-                            myMessage->myGarden = freeOneGarden(gardenToLoop);
-                            showMessageInReadWin(myMessage, "Garden disconnected\n");
+                            for(gardenToLoop; gardenToLoop->gardenSocket != i && gardenToLoop != NULL; gardenToLoop = gardenToLoop->next)
+                            {
+                                if(gardenToLoop != NULL && gardenToLoop->gardenSocket == i)
+                                {
+                                    myMessage->myGarden = freeOneGarden(gardenToLoop);
+                                    showMessageInReadWin(myMessage, "Garden disconnected\n");
+                                    deleted = 1;
+                                    break;
+                                }
+                            }
                         }
                         close(i);
                         continue;
@@ -488,7 +504,6 @@ int listenForConnections(int socket_listen)
 /*manages the actions of the server after it recives messages from gardens and clients that are connected*/
 void serverActions(socketMessage* myMessage, int socket, char* read, int bytes_received)
 {
-
     cJSON* json = cJSON_ParseWithLength(read, bytes_received);
     if(json)
     {
@@ -586,8 +601,6 @@ void serverActions(socketMessage* myMessage, int socket, char* read, int bytes_r
 
                         for(toLoop; toLoop->ownerId != id->valueint; toLoop->next);
 
-                        printw("here2\n");
-                        refresh();
 
                         toLoop->plantId = plantId->valueint;
                         char message[MESSAGESIZE];

@@ -9,13 +9,14 @@ sensors* rawDataToSensors(rawData* myData)
 	for(rawData* toLoop = myData; toLoop != NULL; toLoop = toLoop->next)
 	{
 		sensors* newSensor = mallocSensors();
-		newSensor->plantId = strtol(myData->data[i][0], NULL, 10);
+		newSensor->id = strtol(myData->data[i][0], NULL, 10);
 		newSensor->minMoisture = strtol(myData->data[i][1], NULL, 10);
 		newSensor->maxMoisture = strtol(myData->data[i][2], NULL, 10);
-		newSensor->maxExternalTemperature = strtol(myData->data[i][4], NULL, 10);
-		newSensor->minExternalTemperature = strtol(myData->data[i][5], NULL, 10);
-		newSensor->maxInternalTemperature = strtol(myData->data[i][7], NULL, 10);
-		newSensor->minInternalTemperature = strtol(myData->data[i][8], NULL, 10);
+		newSensor->maxExternalTemperature = strtol(myData->data[i][3], NULL, 10);
+		newSensor->minExternalTemperature = strtol(myData->data[i][4], NULL, 10);
+		newSensor->maxInternalTemperature = strtol(myData->data[i][5], NULL, 10);
+		newSensor->minInternalTemperature = strtol(myData->data[i][6], NULL, 10);
+        newSensor->plantId = strtol(myData->data[i][7], NULL, 10);
 
 		if(toReturn == NULL)
 		{
@@ -78,7 +79,7 @@ queryText* searchSensorsQuery(sensors* toSearch, searchType* searchKind)
 	{
 		if(searchKind[i] == ID)
 		{
-			sprintf(queriesToLoop->line, "SELECT * FROM moistureSensors JOIN externalTemperatureSensor ON moistureSensors.plantId = externalTemperatureSensor.plantId JOIN internalTemperatureSensor ON moistureSensors.plantId = internalTemperatureSensor.plantId WHERE moistureSensors.plantId = $1;");
+			sprintf(queriesToLoop->line, "SELECT * FROM sensors WHERE plantId = $1;");
 			sprintf(queriesToLoop->values[0], "%d", toLoop->plantId);
 			toLoop = toLoop->next;
 		}	
