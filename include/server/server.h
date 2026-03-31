@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <ncurses.h>
+#include <cjson/cJSON.h>
 #define MESSAGESIZE 1024
 
 typedef enum messageType
@@ -63,6 +64,14 @@ void* typeMessage(void* arg);
 int verifyMessageDestination(socketMessage* myMessage);
 int sendMessageToDestination(socketMessage* myMessage, int socketMessage, fd_set* writes);
 void sendMessage(socketMessage* myMessage);
+int newSocketConnection(socketMessage* myMessage);
+void clearSocket(socketMessage* myMessage, int i);
 int readMessage(socketMessage* myMessage);
 int listenForConnections(int socket_listen);
+void newGardenAction(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received);
+void gardernSensorsAction(socketMessage* myMessage, cJSON* json, int socket, int bytes_received);
+void gardenServerActions(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received);
+void newClientAction(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received);
+void clientNewIdAction(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received);
+void clientServerActions(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received);
 void serverActions(socketMessage* myMessage, int socket, char* read, int bytes_received);

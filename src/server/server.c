@@ -369,6 +369,76 @@ void sendMessage(socketMessage* myMessage)
     }
 }
 
+/*Manage a new connection and adds it to our master fd_set*/
+int newSocketConnection(socketMessage* myMessage)
+{
+    char buffer[MESSAGESIZE];
+    struct sockaddr_storage client_address;
+    socklen_t client_len = sizeof(client_address);
+    int socket_client = accept(myMessage->socket_listen, (struct sockaddr*)&client_address, &client_len);
+
+    if(socket_client < 0)
+    {
+        sprintf(buffer, "Error: accept() failed. (%d)", errno);
+        showMessageInReadWin(myMessage, buffer);
+        wgetch(myMessage->readWin);
+        return -1;
+    }
+
+    FD_SET(socket_client, myMessage->master);
+    if(socket_client > *myMessage->max_socket)
+        *myMessage->max_socket = socket_client;
+
+    char address_buffer[100];
+    getnameinfo((struct sockaddr*)&client_address, client_len, address_buffer, sizeof(address_buffer), 0, 0, NI_NUMERICHOST);
+    sprintf(buffer, "New connection from %s", address_buffer);
+    showMessageInReadWin(myMessage, buffer);
+
+    return 0;
+}
+
+/*Closes the socket and frees it structure if the connection was closed*/
+void clearSocket(socketMessage* myMessage, int i)
+{
+    int deleted = 0;
+    FD_CLR(i, myMessage->master);
+    client* toLoop = myMessage->myClient;
+    newGarden* gardenToLoop = myMessage->myGarden;
+    if(deleted == 0)
+    {
+        if(toLoop != NULL)
+        {
+            for(toLoop; toLoop->clientSocket != i && toLoop != NULL; toLoop = toLoop->next)
+            {
+                if(toLoop != NULL && toLoop->clientSocket == i)
+                {
+                    myMessage->myClient = freeOneClient(toLoop);
+                    showMessageInReadWin(myMessage, "Client disconnected\n");
+                    deleted = 1;
+                    break;
+                }
+            }
+        }
+    }
+    if(deleted == 0)
+    {
+        if(gardenToLoop != NULL)
+        {
+            for(gardenToLoop; gardenToLoop->gardenSocket != i && gardenToLoop != NULL; gardenToLoop = gardenToLoop->next)
+            {
+                if(gardenToLoop != NULL && gardenToLoop->gardenSocket == i)
+                {
+                    myMessage->myGarden = freeOneGarden(gardenToLoop);
+                    showMessageInReadWin(myMessage, "Garden disconnected\n");
+                    deleted = 1;
+                    break;
+                }
+            }
+        }
+    }
+    close(i);
+}
+
 /*recives and manages the messages send to the server*/
 int readMessage(socketMessage* myMessage)
 {
@@ -392,26 +462,7 @@ int readMessage(socketMessage* myMessage)
             {
                 if(i == myMessage->socket_listen)
                 {
-                    struct sockaddr_storage client_address;
-                    socklen_t client_len = sizeof(client_address);
-                    int socket_client = accept(myMessage->socket_listen, (struct sockaddr*)&client_address, &client_len);
-
-                    if(socket_client < 0)
-                    {
-                        sprintf(buffer, "Error: accept() failed. (%d)", errno);
-                        showMessageInReadWin(myMessage, buffer);
-                        wgetch(myMessage->readWin);
-                        return -1;
-                    }
-
-                    FD_SET(socket_client, myMessage->master);
-                    if(socket_client > *myMessage->max_socket)
-                        *myMessage->max_socket = socket_client;
-
-                    char address_buffer[100];
-                    getnameinfo((struct sockaddr*)&client_address, client_len, address_buffer, sizeof(address_buffer), 0, 0, NI_NUMERICHOST);
-                    sprintf(buffer, "New connection from %s", address_buffer);
-                    showMessageInReadWin(myMessage, buffer);
+                    newSocketConnection(myMessage);
                 } else
                 {
                     char read[1025] = " ";
@@ -419,37 +470,7 @@ int readMessage(socketMessage* myMessage)
 
                     if(bytes_received < 1)
                     {
-                        int deleted = 0;
-                        FD_CLR(i, myMessage->master);
-                        client* toLoop = myMessage->myClient;
-                        newGarden* gardenToLoop = myMessage->myGarden;
-                        if(deleted == 0)
-                        {
-                            for(toLoop; toLoop->clientSocket != i && toLoop != NULL; toLoop = toLoop->next)
-                            {
-                                if(toLoop != NULL && toLoop->clientSocket == i)
-                                {
-                                    myMessage->myClient = freeOneClient(toLoop);
-                                    showMessageInReadWin(myMessage, "Client disconnected\n");
-                                    deleted = 1;
-                                    break;
-                                }
-                            }
-                        }
-                        if(deleted == 0)
-                        {
-                            for(gardenToLoop; gardenToLoop->gardenSocket != i && gardenToLoop != NULL; gardenToLoop = gardenToLoop->next)
-                            {
-                                if(gardenToLoop != NULL && gardenToLoop->gardenSocket == i)
-                                {
-                                    myMessage->myGarden = freeOneGarden(gardenToLoop);
-                                    showMessageInReadWin(myMessage, "Garden disconnected\n");
-                                    deleted = 1;
-                                    break;
-                                }
-                            }
-                        }
-                        close(i);
+                        clearSocket(myMessage, i);
                         continue;
                     }
 
@@ -501,6 +522,180 @@ int listenForConnections(int socket_listen)
     return 0;
 }
 
+/*If an action is connected to a new garden device it decides which action will be taken*/
+void newGardenAction(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received)
+{
+    cJSON* id = cJSON_GetObjectItemCaseSensitive(json, "id");
+    cJSON* plantId = cJSON_GetObjectItemCaseSensitive(json, "plantId");
+    if(cJSON_IsNumber(id) && id->valueint != 0)
+    {
+        if(myMessage->myGarden == NULL)
+        {
+            myMessage->myGarden = mallocNewGarden();
+            myMessage->myGarden->ownerId = id->valueint;
+            myMessage->myGarden->gardenSocket = socket;
+            if(cJSON_IsNumber(plantId) && plantId->valueint != 0)
+                myMessage->myGarden->plantId = plantId->valueint;
+        } else
+        {
+            newGarden* toLoop = myMessage->myGarden;
+            for(toLoop; toLoop->next != NULL; toLoop = toLoop->next);
+            toLoop->next = mallocNewGarden();
+            toLoop->next->previous = toLoop;
+            toLoop->next->gardenSocket = socket;
+            toLoop->next->ownerId = id->valueint;
+            if(cJSON_IsNumber(plantId) && plantId->valueint != 0)
+                toLoop->next->plantId = plantId->valueint;
+        }
+        char message[MESSAGESIZE];
+        sprintf(message, "%.*s\n", bytes_received, read); 
+        while(myMessage->messageFlag != 0)
+        {
+        }
+        myMessage->messageFlag = 1;
+        strcpy(myMessage->message, message);
+        myMessage->messageSize = bytes_received;
+        myMessage->kindOfMessage = GARDEN;
+        myMessage->messageId = id->valueint;
+        sendMessage(myMessage);
+        showMessageInReadWin(myMessage, "a new device is connected.");
+    }
+}
+
+void saveSensorsData(socketMessage* myMessage, cJSON* json, int socket, char* int)
+{
+    cJSON* id = cJSON_GetObjectItemCaseSensitive(json, "id");
+    cJSON* plantId = cJSON_GetObjectItemCaseSensitive(json, "plantId");
+    cJSON* internalTemp = cJSON_GetObjectItemCaseSensitive(json, "internalTemp");
+    cJSON* externalTem = cJSON_GetObjectItemCaseSensitive(json, "externalTemp");
+    cJSON* moisture = cJSON_GetObjectItemCaseSensitive(json, "moisture");
+
+    //Needs the function to add to the current situation table
+}
+
+/*If an action is connected to a garden sensor it decides which action will be taken*/
+void gardernSensorsAction(socketMessage* myMessage, cJSON* json, int socket, int bytes_received)
+{
+            cJSON* id = cJSON_GetObjectItemCaseSensitive(json, "id");
+            cJSON* plantId = cJSON_GetObjectItemCaseSensitive(json, "plantId");
+
+            sensors* toGetInfo = mallocSensors();
+            toGetInfo->plantId = plantId->valueint;
+            searchType searchKind[2] = {ID, END};
+
+            sensors* sensorsInfo = readPlants(toGetInfo, searchKind, searchSensorsQuery);
+
+            char message[MESSAGESIZE];
+            sprintf(message, "{\"device\": \"server\", "
+                    "\"command\": \"moistureConfig\", "
+                    "\"id\": %d, "
+                    "\"plantId\": %d, "
+                    "\"moistureDry\": %lu, "
+                    "\"moistureWet\": %lu}", id->valueint, plantId->valueint, sensorsInfo->minMoisture, sensorsInfo->maxMoisture);
+
+            while(myMessage->messageFlag != 0)
+            {
+            }
+            while(myMessage->messageFlag != 0)
+            myMessage->messageFlag = 1;
+            strcpy(myMessage->message, message);
+            myMessage->messageSize = strlen(message);
+            myMessage->kindOfMessage = SERVER;
+            myMessage->messageId = plantId->valueint;
+            sendMessage(myMessage);
+            showMessageInReadWin(myMessage, "The sensors values ware acquired");
+
+            freeSensors(sensorsInfo);
+}
+
+/*Manages the actions connected to the garden devices*/
+void gardenServerActions(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received)
+{
+    cJSON* command = cJSON_GetObjectItemCaseSensitive(json, "command");
+    if(cJSON_IsString(command) && (command->valuestring != NULL))
+    {
+        if(!strcmp(command->valuestring, "newGarden") || !strcmp(command->valuestring, "oldGarden"))
+        {            
+            newGardenAction(myMessage, json, socket, read, bytes_received);
+        } else if(!strcmp(command->valuestring, "dataGarden"))
+        {
+        }
+        else if(!strcmp(command->valuestring, "moistureConfig"))
+        {
+            gardernSensorsAction(myMessage, json, socket, bytes_received);
+        }
+    }
+}
+
+
+/*If an action is connected to a client device it decides which action will be taken*/
+void newClientAction(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received)
+{
+    cJSON* id = cJSON_GetObjectItemCaseSensitive(json, "id");
+    if(myMessage->myClient == NULL)
+    {
+        myMessage->myClient = mallocNewClient();
+        myMessage->myClient->clientSocket = socket;
+        if(cJSON_IsNumber(id) && id->valueint != 0)
+            myMessage->myClient->clientId = id->valueint;
+    } else
+    {
+        client* toLoop = myMessage->myClient;
+        for(toLoop; toLoop->next != NULL; toLoop = toLoop->next);
+        toLoop->next = mallocNewClient();
+        toLoop->next->previous = toLoop;
+        toLoop->next->clientSocket = socket;
+        if(cJSON_IsNumber(id) && id->valueint != 0)
+            toLoop->next->clientId = id->valueint;
+    }
+
+
+    showMessageInReadWin(myMessage, "a new client is now connected.");
+
+}
+
+/*Sets a new Id to a new plant connected*/
+void clientNewIdAction(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received)
+{
+    cJSON* id = cJSON_GetObjectItemCaseSensitive(json , "id");
+    cJSON* plantId = cJSON_GetObjectItemCaseSensitive(json, "plantId");
+    newGarden* toLoop = myMessage->myGarden;
+
+    for(toLoop; toLoop->ownerId != id->valueint; toLoop->next);
+
+    toLoop->plantId = plantId->valueint;
+    char message[MESSAGESIZE];
+    sprintf(message, "%.*s\n", bytes_received, read);
+    while(myMessage->messageFlag != 0)
+    {
+    }
+    myMessage->messageFlag = 1;
+    strcpy(myMessage->message, message);
+    myMessage->messageSize = bytes_received;
+    myMessage->kindOfMessage = CLIENT;
+    if(cJSON_IsNumber(plantId))
+        myMessage->messageId = plantId->valueint;
+    sendMessage(myMessage);
+    showMessageInReadWin(myMessage, "The new device is now configured.\n");
+}
+
+/*Manages the server actions related to clients and garden devices*/
+void clientServerActions(socketMessage* myMessage, cJSON* json, int socket, char* read, int bytes_received)
+{
+    cJSON* command = cJSON_GetObjectItemCaseSensitive(json, "command");
+
+    if(cJSON_IsString(command) && command->valuestring != NULL)
+    {
+        if(!strcmp(command->valuestring, "newGardenId"))
+        { 
+            clientNewIdAction(myMessage, json, socket, read, bytes_received);
+        } else if(!strcmp(command->valuestring, "newClient"))
+        {
+            newClientAction(myMessage, json, socket, read, bytes_received);
+        }
+    }
+}
+
 /*manages the actions of the server after it recives messages from gardens and clients that are connected*/
 void serverActions(socketMessage* myMessage, int socket, char* read, int bytes_received)
 {
@@ -511,135 +706,11 @@ void serverActions(socketMessage* myMessage, int socket, char* read, int bytes_r
         if(cJSON_IsString(device) && (device->valuestring != NULL))
         {
             if(!strcmp(device->valuestring, "garden"))
-            {
-                cJSON* command = cJSON_GetObjectItemCaseSensitive(json, "command");
-                if(cJSON_IsString(command) && (command->valuestring != NULL))
-                {
-                    if(!strcmp(command->valuestring, "newGarden"))
-                    {
-                        cJSON* id = cJSON_GetObjectItemCaseSensitive(json, "id");
-                        cJSON* plantId = cJSON_GetObjectItemCaseSensitive(json, "plantId");
-                        if(cJSON_IsNumber(id) && id->valueint != 0)
-                        {
-                            if(myMessage->myGarden == NULL)
-                            {
-                                myMessage->myGarden = mallocNewGarden();
-                                myMessage->myGarden->ownerId = id->valueint;
-                                myMessage->myGarden->gardenSocket = socket;
-                                if(cJSON_IsNumber(plantId) && plantId->valueint != 0)
-                                    myMessage->myGarden->plantId = plantId->valueint;
-                            } else
-                            {
-                                newGarden* toLoop = myMessage->myGarden;
-                                for(toLoop; toLoop->next != NULL; toLoop = toLoop->next);
-                                toLoop->next = mallocNewGarden();
-                                toLoop->next->previous = toLoop;
-                                toLoop->next->gardenSocket = socket;
-                                toLoop->next->ownerId = id->valueint;
-                                if(cJSON_IsNumber(plantId) && plantId->valueint != 0)
-                                    toLoop->next->plantId = plantId->valueint;
-                            }
-                            char message[MESSAGESIZE];
-                            sprintf(message, "%.*s\n", bytes_received, read); 
-                            while(myMessage->messageFlag != 0)
-                            {
-                            }
-                            myMessage->messageFlag = 1;
-                            strcpy(myMessage->message, message);
-                            myMessage->messageSize = bytes_received;
-                            myMessage->kindOfMessage = GARDEN;
-                            myMessage->messageId = id->valueint;
-                            sendMessage(myMessage);
-                            showMessageInReadWin(myMessage, "a new device is connected.");
-                        }
-                    } else if(!strcmp(command->valuestring, "moistureConfig"))
-                    {
-                        cJSON* id = cJSON_GetObjectItemCaseSensitive(json, "id");
-                        cJSON* plantId = cJSON_GetObjectItemCaseSensitive(json, "plantId");
-
-                        sensors* toGetInfo = mallocSensors();
-                        toGetInfo->plantId = plantId->valueint;
-                        searchType searchKind[2] = {ID, END};
-
-                        sensors* sensorsInfo = readPlants(toGetInfo, searchKind, searchSensorsQuery);
-
-                        char message[MESSAGESIZE];
-                        sprintf(message, "{\"device\": \"server\", "
-                                "\"command\": \"moistureConfig\", "
-                                "\"id\": %d, "
-                                "\"plantId\": %d, "
-                                "\"moistureDry\": %lu, "
-                                "\"moistureWet\": %lu}", id->valueint, plantId->valueint, sensorsInfo->minMoisture, sensorsInfo->maxMoisture);
-
-                        while(myMessage->messageFlag != 0)
-                        {
-                        }
-                        showMessageInReadWin(myMessage, "sending");
-                        while(myMessage->messageFlag != 0)
-                        myMessage->messageFlag = 1;
-                        strcpy(myMessage->message, message);
-                        myMessage->messageSize = strlen(message);
-                        myMessage->kindOfMessage = SERVER;
-                        myMessage->messageId = plantId->valueint;
-                        sendMessage(myMessage);
-                        showMessageInReadWin(myMessage, "The sensors values ware acquired");
-
-                        freeSensors(sensorsInfo);
-                    }
-                }
+            { 
+                gardenServerActions(myMessage, json, socket, read, bytes_received);
             } else if(!strcmp(device->valuestring, "client"))
             {
-                cJSON* command = cJSON_GetObjectItemCaseSensitive(json, "command");
-
-                if(cJSON_IsString(command) && command->valuestring != NULL)
-                {
-                    if(!strcmp(command->valuestring, "newGardenId"))
-                    {
-                        cJSON* id = cJSON_GetObjectItemCaseSensitive(json , "id");
-                        cJSON* plantId = cJSON_GetObjectItemCaseSensitive(json, "plantId");
-                        newGarden* toLoop = myMessage->myGarden;
-
-                        for(toLoop; toLoop->ownerId != id->valueint; toLoop->next);
-
-
-                        toLoop->plantId = plantId->valueint;
-                        char message[MESSAGESIZE];
-                        sprintf(message, "%.*s\n", bytes_received, read);
-                        while(myMessage->messageFlag != 0)
-                        {
-                        }
-                        myMessage->messageFlag = 1;
-                        strcpy(myMessage->message, message);
-                        myMessage->messageSize = bytes_received;
-                        myMessage->kindOfMessage = CLIENT;
-                        if(cJSON_IsNumber(plantId))
-                            myMessage->messageId = plantId->valueint;
-                        sendMessage(myMessage);
-                        showMessageInReadWin(myMessage, "The new device is now configured.\n");
-                    } else if(!strcmp(command->valuestring, "newClient"))
-                    {
-                        cJSON* id = cJSON_GetObjectItemCaseSensitive(json, "id");
-                        if(myMessage->myClient == NULL)
-                        {
-                            myMessage->myClient = mallocNewClient();
-                            myMessage->myClient->clientSocket = socket;
-                            if(cJSON_IsNumber(id) && id->valueint != 0)
-                                myMessage->myClient->clientId = id->valueint;
-                        } else
-                        {
-                            client* toLoop = myMessage->myClient;
-                            for(toLoop; toLoop->next != NULL; toLoop = toLoop->next);
-                            toLoop->next = mallocNewClient();
-                            toLoop->next->previous = toLoop;
-                            toLoop->next->clientSocket = socket;
-                            if(cJSON_IsNumber(id) && id->valueint != 0)
-                                toLoop->next->clientId = id->valueint;
-                        }
-
-
-                        showMessageInReadWin(myMessage, "a new client is now connected.");
-                    }
-                } 
+                clientServerActions(myMessage, json, socket, read, bytes_received);
             }
         }
 

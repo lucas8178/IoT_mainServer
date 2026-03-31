@@ -6,6 +6,5 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
-#include <cjson/cJSON.h>
 
 #define VALUESSIZE 256
